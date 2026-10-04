@@ -4105,7 +4105,10 @@ let USERS = []; // preenchido por loadPerfis(), após o login
 // partes do sistema (log de login, atividade, permissões etc.).
 async function loadPerfis() {
   const rows = await sbFetch('perfis', 'GET', null, '?select=*&order=nome');
-  USERS = (rows || []).map(r => ({ ...r, user: r.email }));
+  loadPerfis.falhou = (rows === null);
+  loadPerfis.erro = loadPerfis.falhou ? _sbUltimoErro : null;
+  // E-mail sempre em minúsculas e sem espaços (o Supabase Auth também usa assim)
+  USERS = (rows || []).map(r => ({ ...r, user: String(r.email || '').trim().toLowerCase() }));
   return USERS;
 }
 
@@ -4738,7 +4741,7 @@ function loadSavedLogin() {
 }
 
 function doLogin() {
-  const email = document.getElementById('login-user').value.trim();
+  const email = document.getElementById('login-user').value.trim().toLowerCase();
   const senha = document.getElementById('login-pass').value;
   const errEl = document.getElementById('login-error');
   errEl.style.display = 'none';
@@ -4751,7 +4754,15 @@ function doLogin() {
     await loadPerfis();
     const perfil = USERS.find(x => x.user === email);
     if (!perfil) {
-      errEl.textContent = 'Login válido, mas seu perfil ainda não foi cadastrado na tela de Usuários. Peça para o admin cadastrar seu e-mail lá.';
+      if (loadPerfis.falhou) {
+        const e = loadPerfis.erro || {};
+        errEl.textContent = 'Login válido, mas não consegui ler a tabela "perfis" no Supabase (erro ' + (e.status || e.tipo || '?') + '). ' +
+          'Verifique se a tabela existe e se o usuário autenticado tem permissão. Detalhe: ' + String(e.detalhe || '').slice(0, 200);
+      } else if (!USERS.length) {
+        errEl.textContent = 'Login válido, mas a tabela "perfis" voltou VAZIA. Ou nenhum perfil foi cadastrado, ou a regra de RLS está bloqueando a leitura.';
+      } else {
+        errEl.textContent = 'Login válido, mas o e-mail ' + email + ' não está na tabela "perfis". Peça para o admin cadastrar seu e-mail na tela de Usuários.';
+      }
       errEl.style.display = 'block';
       await supabaseAuthLogout();
       return;
@@ -4767,7 +4778,7 @@ async function tentarRestaurarSessao() {
   const token = await obterAccessTokenValido();
   if (!token) return;
   await loadPerfis();
-  const perfil = USERS.find(x => x.user === sessao.email);
+  const perfil = USERS.find(x => x.user === String(sessao.email || '').trim().toLowerCase());
   if (!perfil) { await supabaseAuthLogout(); return; }
   _finalizarLogin(perfil);
 }
