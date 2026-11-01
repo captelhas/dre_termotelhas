@@ -1142,7 +1142,7 @@ body.menu-oculto .sidebar { transform:translateX(-248px); }
     </div>
 
     <!-- ══ SELETOR GLOBAL DE EMPRESA ══ -->
-    <div id="empresa-switch" style="padding:10px 16px 12px;border-bottom:1px solid #f1efed;background:#fffaf6;">
+    <div id="empresa-switch" style="display:none;padding:10px 16px 12px;border-bottom:1px solid #f1efed;background:#fffaf6;">
       <label style="display:block;font-size:10px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:#9a3412;margin-bottom:5px;">Empresa</label>
       <select id="empresa-ativa" onchange="trocarEmpresa(this.value)"
               style="width:100%;padding:8px 10px;font-size:13px;font-weight:600;border:1.5px solid #ea580c;border-radius:6px;background:#fff;color:#3A3B3D;cursor:pointer;">
@@ -4865,8 +4865,17 @@ const TABELAS_POR_EMPRESA = [
   'cartoes','cartao_despesas'
 ];
 
+// Sistema exclusivo da Termotelhas Weber: sem troca de empresa.
 function empresaAtual() {
-  try { return localStorage.getItem(EMPRESA_KEY) || ''; } catch(e) { return ''; }
+  try { localStorage.removeItem(EMPRESA_KEY); } catch(e) {}
+  return '';
+}
+
+// Id da Termotelhas Weber (gravado automaticamente nos novos registros).
+function empresaPadraoId() {
+  const lista = db.empresas || [];
+  const e = lista.find(x => /weber/i.test((x.nome || '') + ' ' + (x.apelido || ''))) || lista[0];
+  return e ? e.id : null;
 }
 
 function empresaNome(id) {
@@ -4893,8 +4902,7 @@ function filtroEmpresaQuery(tabela) {
 // só se atualizar a página. Use esta função depois de salvar/editar para
 // decidir se o registro deve continuar no array em memória.
 function pertenceEmpresaAtiva(empresa_id) {
-  const atual = empresaAtual();
-  return !atual || empresa_id === atual;
+  return true;
 }
 
 // saveDB e loadDB agora são no-op — dados vão direto ao Supabase
@@ -5184,7 +5192,7 @@ function _finalizarLogin(found) {
   if (sll) sll.textContent = prev ? 'Último acesso: ' + fmtTs(prev.ts) : 'Primeiro acesso';
   // Mostrar/ocultar nav admin
   const isAdmin = found.role === 'admin';
-  ['nav-label-admin','nav-item-usuarios','nav-item-empresas','nav-item-auditoria'].forEach(id => {
+  ['nav-label-admin','nav-item-usuarios','nav-item-auditoria'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.style.display = isAdmin ? '' : 'none';
   });
@@ -5247,6 +5255,7 @@ function paginaVisivel(p) {
 let _paginaAtual = 'dashboard';
 
 function showPage(p) {
+  if (p === 'empresas') p = 'dashboard';
   setTimeout(() => { const _nv = document.getElementById('nav-' + p); if (_nv && document.getElementById('page-' + p) && document.getElementById('page-' + p).classList.contains('active')) { document.querySelectorAll('.nav-item.active, .nav-sub-item.active').forEach(x => { if (x !== _nv) x.classList.remove('active'); }); _nv.classList.add('active'); } }, 0);
   // Telas ocultas não abrem nem por chamada direta
   if (paginaOculta(p)) return;
@@ -6092,6 +6101,8 @@ function popularSeletorEmpresa() {
 // Dashboard), deixando claro se o número na tela é de uma empresa só ou
 // do consolidado do grupo.
 function atualizarTagsEmpresa() {
+  document.querySelectorAll('.empresa-tag').forEach(el => { el.textContent = ''; el.style.display = 'none'; });
+  return;
   const emp = empresaAtual();
   const txt = emp ? empresaNome(emp) : 'Consolidado';
   const cor = emp ? '#ea580c' : '#57534e';
@@ -6128,7 +6139,9 @@ function populateEmpresaSelects() {
     const anterior = sel.value;
     sel.innerHTML = '<option value="">Selecione...</option>' +
       empresasAtivas().map(e => `<option value="${e.id}">${e.apelido || e.nome}</option>`).join('');
-    sel.value = anterior || atual || '';
+    sel.value = empresaPadraoId() || anterior || atual || '';
+    const grupo = sel.closest('.form-group');
+    if (grupo) grupo.style.display = 'none'; else sel.style.display = 'none';
   });
 }
 
@@ -6149,11 +6162,12 @@ async function trocarEmpresa(id) {
 // Empresa que deve ser gravada em um lançamento novo.
 // Se o usuário está no consolidado, ele precisa escolher no formulário.
 function empresaDoForm(selectId) {
+  const padrao = empresaPadraoId();
+  if (padrao) return padrao;
   const sel = document.getElementById(selectId);
   const val = sel ? sel.value : '';
   if (val) return val;
-  const atual = empresaAtual();
-  if (atual) return atual;
+  return undefined;
   alert('Selecione a empresa deste lançamento.\n\nVocê está no modo "Consolidado", então é preciso indicar a qual empresa o registro pertence.');
   if (sel) sel.focus();
   return null;
@@ -7997,7 +8011,12 @@ function clearPagasFiltros() {
 // Consolidado não dá para saber a qual empresa o número pertence, então
 // pedimos que o usuário escolha uma empresa antes de lançar.
 function exigirEmpresaAtiva(oQue) {
-  const emp = empresaAtual();
+  const emp = empresaPadraoId();
+  if (!emp) {
+    alert(`Cadastre a empresa Termotelhas Weber antes de lançar ${oQue}.`);
+    return null;
+  }
+  return emp;
   if (!emp) {
     alert(`Selecione uma empresa no topo do menu antes de lançar ${oQue}.\n\nNo modo "Consolidado" não é possível saber a qual empresa o valor pertence.`);
     return null;
