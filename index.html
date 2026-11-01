@@ -2585,6 +2585,13 @@ body.menu-oculto .sidebar { transform:translateX(-248px); }
         </div>
       </div>
 
+      <!-- Tabela de Variação de Estoque (Saldo Inicial / Saldo Final) -->
+      <div class="card" style="margin-bottom:20px;overflow-x:auto;">
+        <div class="card-title">Variação de Estoque</div>
+        <div class="page-sub" style="margin-top:-6px;margin-bottom:12px">Digite o saldo inicial de Janeiro e o saldo final de cada mês. O saldo inicial dos demais meses é o saldo final do mês anterior. A variação (Saldo Final − Saldo Inicial) é lançada automaticamente na linha de Variação do Estoque do DRE.</div>
+        <div id="estoque-tabela-wrap"></div>
+      </div>
+
       <!-- Gráfico DRE -->
       <div class="card">
         <div class="card-title">Evolução Mensal</div>
@@ -11654,6 +11661,83 @@ async function carregarVarEstoque() {
       try { dreVarEstoque[ano] = JSON.parse(c.value) || {}; } catch(e) { dreVarEstoque[ano] = {}; }
     });
   } catch(e) { console.error('Erro ao carregar variação de estoque:', e); }
+  try {
+    const rows2 = await sbFetch('config', 'GET', null, '?key=like.saldo_estoque:*');
+    dreSaldoEstoque = {};
+    (rows2 || []).forEach(c => {
+      const ano = c.key.split(':')[1];
+      try { dreSaldoEstoque[ano] = JSON.parse(c.value) || {}; } catch(e) { dreSaldoEstoque[ano] = {}; }
+    });
+  } catch(e) { console.error('Erro ao carregar saldos de estoque:', e); }
+}
+
+// ── TABELA DE SALDOS DE ESTOQUE (Saldo Inicial / Saldo Final / Variação) ──
+// Guardada em config (key = saldo_estoque:{ano}, value = JSON {ini, fin:{mes:valor}}).
+// Saldo Inicial de Jan é digitado; dos demais meses = Saldo Final do mês anterior.
+// Variação = Saldo Final − Saldo Inicial, gravada em dreVarEstoque (linha do DRE).
+let dreSaldoEstoque = {};
+
+function estoqueSaldosAno(ano) {
+  const d = dreSaldoEstoque[ano] || {};
+  const fin = d.fin || {};
+  const ini = {}, finais = {}, varia = {};
+  let anterior = parseFloat(d.ini) || 0;
+  for (let m = 1; m <= 12; m++) {
+    ini[m] = anterior;
+    const temFinal = fin[m] !== undefined && fin[m] !== null && fin[m] !== '';
+    finais[m] = temFinal ? (parseFloat(fin[m]) || 0) : null;
+    varia[m] = temFinal ? finais[m] - ini[m] : null;
+    if (temFinal) anterior = finais[m];
+  }
+  return { ini, finais, varia };
+}
+
+async function setSaldoEstoque(tipo, mes, rawValor) {
+  const ano = parseInt(document.getElementById('dre-ano').value);
+  if (!ano) return;
+  if (!dreSaldoEstoque[ano]) dreSaldoEstoque[ano] = {};
+  const d = dreSaldoEstoque[ano];
+  if (!d.fin) d.fin = {};
+  const vazio = String(rawValor || '').trim() === '';
+  const v = parseContabil(rawValor);
+  if (tipo === 'ini') { d.ini = vazio ? 0 : v; }
+  else { if (vazio) delete d.fin[mes]; else d.fin[mes] = v; }
+
+  // Recalcula a variação de todos os meses e grava na linha do DRE
+  const { varia } = estoqueSaldosAno(ano);
+  if (!dreVarEstoque[ano]) dreVarEstoque[ano] = {};
+  for (let m = 1; m <= 12; m++) {
+    if (varia[m] === null) { if (tipo === 'fin' && m === mes) delete dreVarEstoque[ano][m]; continue; }
+    if (Math.abs(varia[m]) < 0.005) delete dreVarEstoque[ano][m]; else dreVarEstoque[ano][m] = Math.round(varia[m] * 100) / 100;
+  }
+
+  const key = 'saldo_estoque:' + ano;
+  await sbFetch('config', 'DELETE', null, `?key=eq.${encodeURIComponent(key)}`);
+  await sbFetch('config', 'POST', { id: uid(), key, value: JSON.stringify(d) });
+  await salvarVarEstoque(ano);
+  renderDre();
+}
+
+function renderTabelaEstoque(ano) {
+  const wrap = document.getElementById('estoque-tabela-wrap');
+  if (!wrap) return;
+  if (!ano) { wrap.innerHTML = '<div class="empty-state" style="padding:16px">Selecione um ano.</div>'; return; }
+  const d = dreSaldoEstoque[ano] || {};
+  const { ini, finais, varia } = estoqueSaldosAno(ano);
+  const meses = ['JAN','FEV','MAR','ABR','MAI','JUN','JUL','AGO','SET','OUT','NOV','DEZ'];
+  const inp = (val, onch) => `<input type="text" inputmode="decimal" value="${val === null || val === undefined ? '' : fmtContabil(val)}" onchange="${onch}" onfocus="this.select()" placeholder="0,00" style="width:100%;min-width:88px;text-align:right;font-family:'DM Mono',monospace;font-size:12px;padding:5px 7px;border:1px solid #e7e5e4;border-radius:6px;background:#fff;color:${(val || 0) < 0 ? '#dc2626' : '#1f2937'}" />`;
+  const num = v => v === null ? '<span class="dfc-val-zero">—</span>' : `<span style="color:${v < 0 ? '#dc2626' : '#1f2937'}">${v < 0 ? '(' + fmtBRL(Math.abs(v)) + ')' : fmtBRL(v)}</span>`;
+  const td = 'style="padding:4px;text-align:right;font-family:\'DM Mono\',monospace;font-size:12px;white-space:nowrap"';
+  let h = '<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr><th style="text-align:left;padding:6px 8px"></th>';
+  h += meses.map(m => `<th style="padding:6px 4px;text-align:right">${m}</th>`).join('') + '</tr></thead><tbody>';
+  h += '<tr><td style="padding:6px 8px;font-weight:600;white-space:nowrap">Saldo Inicial</td>';
+  for (let m = 1; m <= 12; m++) h += m === 1 ? `<td style="padding:2px 4px">${inp(d.ini || null, "setSaldoEstoque('ini', 1, this.value)")}</td>` : `<td ${td}>${num(ini[m])}</td>`;
+  h += '</tr><tr><td style="padding:6px 8px;font-weight:600;white-space:nowrap">Saldo Final</td>';
+  for (let m = 1; m <= 12; m++) h += `<td style="padding:2px 4px">${inp(finais[m], `setSaldoEstoque('fin', ${m}, this.value)`)}</td>`;
+  h += '</tr><tr style="border-top:2px solid #e7e5e4;background:#fafaf9"><td style="padding:6px 8px;font-weight:700;white-space:nowrap">Variação de Estoque</td>';
+  for (let m = 1; m <= 12; m++) h += `<td ${td}><b>${num(varia[m])}</b></td>`;
+  h += '</tr></tbody></table>';
+  wrap.innerHTML = h;
 }
 
 async function salvarVarEstoque(ano) {
@@ -11688,6 +11772,7 @@ function renderDre() {
   const ocultarVarEst = !!((document.getElementById('dre-ocultar-varestoque') || {}).checked);
   const wrap = document.getElementById('dre-tabela-wrap');
   if (!wrap) return;
+  renderTabelaEstoque(ano);
 
   if (!ano) { wrap.innerHTML = '<div class="empty-state" style="padding:32px">Selecione um ano.</div>'; return; }
 
